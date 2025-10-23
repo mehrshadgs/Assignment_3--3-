@@ -192,28 +192,109 @@ class LagrangianHeuristic:
         Method that, given an array of Lagrangian multipliers computes and returns 
         the optimal value of the Lagrangian problem
         """
-        return
+
+        f = self.instance.f
+        c = self.instance.c
+        
+        
+        # if cost new is negative, it is cheaper to server than to pay the fine,
+        # if cost new is positive, pay the fine
+        #print(c[0])
+        #print(np.sum(c[0]))
+        costNew = c - labda[:, np.newaxis]
+        #print(costNew[0])
+        #print(np.sum(costNew[0]))
+        profits = np.sum(np.minimum(0, costNew), axis=0) + f
+        # proftis = costNew /  cost - labda
+        #print("Profits:", profits)
+        
+        facility_cost = np.minimum(0, profits)
+
+        #print("Facility costs:", facility_cost)
+        # lower bound is labda + min(0, cost - labda) so
+        # lower bound is , labda or cost. 
+        lower_bound = np.sum(labda) + np.sum(facility_cost)
+        
+
+        #print("Lower bound:", lower_bound)
+        
+        
+        # lot of prints, I haven't worked with numpy for a while :)
+        
+        return lower_bound
     
     def computeLagrangianSolution(self,labda):
         """
         Method that, given an array of Lagrangian multipliers computes and returns 
         the Lagrangian solution (as a UFL_Solution)
         """
-        return
+        
+        c = self.instance.c
+        f = self.instance.f
+        
+        costnew = c - labda[:, np.newaxis]
+        print("costnew:", costnew)
+        y = np.where(np.sum(np.minimum(0, costnew), axis=0) + f < 0, 1, 0)
+        #print("y:", y)
+        x = np.where(costnew < 0, 1, 0)
+        #print("x : " , x)
+        
+        return UFL_Solution(y, x, self.instance)
     
     def convertToFeasibleSolution(self,lagr_solution):
         """
         Method that, given the Lagrangian Solution computes and returns 
         a feasible solution (as a UFL_Solution)
         """
-        return
+        
+        y = lagr_solution.y.copy()
+        c = lagr_solution.instance.c
+        print("c:", c.shape)
+        f = lagr_solution.instance.f
+        n_markets = lagr_solution.instance.n_markets
+        n_facilities = lagr_solution.instance.n_facilities
+        
+        Xnew = np.zeros((n_markets, n_facilities))
+        open_facilities = np.where(y == 1)[0]
+        
+        if len(open_facilities) == 0:
+            total_cost = f + np.sum(c, axis=0)
+            cheapest_facility = np.argmin(total_cost)
+            
+            y[cheapest_facility] = 1
+            
+            open_facilities = np.array([cheapest_facility])
+        
+        for i in range(n_markets):
+
+                
+            costs_open = c[i, open_facilities]
+            cheapest_open_index = np.argmin(costs_open)
+            cheapest_open_facility = open_facilities[cheapest_open_index]
+            Xnew[i, cheapest_open_facility] = 1.0
+        
+        # print("Lagrangian x:", lagr_solution.x)
+        # print("Feasible x:", Xnew)
+        # print("Feasible y:", y)
+        return UFL_Solution(y, Xnew, lagr_solution.instance)
+        
         
     def updateMultipliers(self,labda_old,lagr_solution):
         """
         Method that, given the previous Lagrangian multipliers and Lagrangian Solution 
         updates and returns a new array of Lagrangian multipliers
         """
-        return
+        
+        labda_new = labda_old.copy()
+        
+        x = lagr_solution.x
+        cost = np.sum(x, axis=1)
+
+        labda_new = np.where(cost > 1, labda_old * 0.9, labda_new)
+        labda_new = np.where(cost < 1, labda_old * 1.1, labda_new)
+        labda_new = np.where(cost == 1, labda_old, labda_new)
+
+        return labda_new
     
     def runHeuristic(self):
         """
@@ -221,7 +302,7 @@ class LagrangianHeuristic:
         """
         
         
-read_instance = UFL_Problem.readInstance("MO5")
+read_instance = UFL_Problem.readInstance("MO1")
 n_markets = read_instance.n_markets
 n_facilities = read_instance.n_facilities
 
@@ -234,4 +315,10 @@ solution = UFL_Solution(y, x, read_instance)
 
 #solution.isFeasible()
 solution.getCosts()
+lagrangian_heuristic = LagrangianHeuristic(read_instance)
+#lagrangian_heuristic.computeTheta(np.ones(n_markets)* 40)
+solution = lagrangian_heuristic.computeLagrangianSolution(np.ones(n_markets) * 1)
+print(UFL_Solution.isFeasible(solution))
+solution = lagrangian_heuristic.convertToFeasibleSolution(solution)
+print(UFL_Solution.isFeasible(solution))
 #print(read_instance)
