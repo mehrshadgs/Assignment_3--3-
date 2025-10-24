@@ -3,6 +3,7 @@
 @author: Original template by Rolf van Lieshout and Krissada Tundulyasaree
 """
 import numpy as np
+import matplotlib.pyplot as plt
 
 
 class UFL_Problem:
@@ -171,7 +172,7 @@ class UFL_Solution:
         #print(len(self.instance.c[0]))
         
         #print("Opening costs:", opening_costs)
-        print("total  costs:", transportation_costs + opening_costs)
+        #print("total  costs:", transportation_costs + opening_costs)
         return opening_costs + transportation_costs
     
 class LagrangianHeuristic: 
@@ -219,28 +220,38 @@ class LagrangianHeuristic:
         #print("Lower bound:", lower_bound)
         
         
-        # lot of prints, I haven't worked with numpy for a while :)
         
         return lower_bound
     
     def computeLagrangianSolution(self,labda):
-        """
-        Method that, given an array of Lagrangian multipliers computes and returns 
-        the Lagrangian solution (as a UFL_Solution)
-        """
+            """
+            Method that, given an array of Lagrangian multipliers computes and returns
+            the Lagrangian solution (as a UFL_Solution), following the logic from slides.
+            """
+            c = self.instance.c
+            f = self.instance.f
+            tol = 1e-5 # the sume is not exactly 1
+
+            # Calculate c_ij - lambda_i
+            costnew = c - labda[:, np.newaxis] 
+            #print( costnew[0])
+            profits = f + np.sum(np.minimum(0, costnew), axis=0) 
+            #print(profits)
+            # Open if profit is negative
+            y = np.where(profits < -tol, 1.0, 0.0) 
+            #print(y)
+
+
+
+            assign_if_cost_neg = costnew < -tol
+            assign_if_facility_open = y == 1.0
+
+   
+            x = np.where(assign_if_cost_neg & assign_if_facility_open, 1.0, 0.0)
+
+
+            return UFL_Solution(y, x, self.instance)
         
-        c = self.instance.c
-        f = self.instance.f
-        
-        costnew = c - labda[:, np.newaxis]
-        print("costnew:", costnew)
-        y = np.where(np.sum(np.minimum(0, costnew), axis=0) + f < 0, 1, 0)
-        #print("y:", y)
-        x = np.where(costnew < 0, 1, 0)
-        #print("x : " , x)
-        
-        return UFL_Solution(y, x, self.instance)
-    
     def convertToFeasibleSolution(self,lagr_solution):
         """
         Method that, given the Lagrangian Solution computes and returns 
@@ -249,7 +260,7 @@ class LagrangianHeuristic:
         
         y = lagr_solution.y.copy()
         c = lagr_solution.instance.c
-        print("c:", c.shape)
+        #print("c:", c.shape)
         f = lagr_solution.instance.f
         n_markets = lagr_solution.instance.n_markets
         n_facilities = lagr_solution.instance.n_facilities
@@ -279,46 +290,149 @@ class LagrangianHeuristic:
         return UFL_Solution(y, Xnew, lagr_solution.instance)
         
         
-    def updateMultipliers(self,labda_old,lagr_solution):
-        """
-        Method that, given the previous Lagrangian multipliers and Lagrangian Solution 
-        updates and returns a new array of Lagrangian multipliers
-        """
-        
-        labda_new = labda_old.copy()
-        
-        x = lagr_solution.x
-        cost = np.sum(x, axis=1)
+    def updateMultipliers(self, labda_old, lagr_solution, iteration, initial_step=1.0):
+            """
+            Method that updates Lagrangian multipliers based on the rule from the slides,
+            using an additive step that decreases with iterations.
+            """
+            tol = 1e-5
+            #print(labda_old)
+            
+            sum_x_over_j = np.sum(lagr_solution.x, axis=1)
 
-        labda_new = np.where(cost > 1, labda_old * 0.9, labda_new)
-        labda_new = np.where(cost < 1, labda_old * 1.1, labda_new)
-        labda_new = np.where(cost == 1, labda_old, labda_new)
+            # AI idea: Step size decreases with sqrt of iteration number
+            step = initial_step / np.sqrt(iteration) 
 
-        return labda_new
-    
-    def runHeuristic(self):
-        """
-        Method that performs the Lagrangian Heuristic. 
-        """
+
+            labda_new = labda_old.copy() 
+
+            increase_indices = sum_x_over_j < 1.0 - tol
+            labda_new[increase_indices] = labda_old[increase_indices] + step
+
+            decrease_indices = sum_x_over_j > 1.0 + tol
+            labda_new[decrease_indices] = labda_old[decrease_indices] - step
+
+
+
+            labda_new = np.maximum(0, labda_new)
+            #print(labda_new)
+            return labda_new
+
+    def runHeuristic(self, max_iterations, initial_step=2.0, gap_tolerance=0.1):
+            """
+            Method that performs the Lagrangian Heuristic.
+            """
+
+            labda = np.zeros(self.instance.n_markets)
+            best_lb = -np.inf
+            best_up = np.inf  
+            best_feasible_solution = None 
+
+            lower_bounds_history = []
+            Best_upper_bounds_history = []
+            upper_bounds_history = []
+
+            print(f"Parameters: Max Iterations={max_iterations}, Initial Step={initial_step}, Gap Tol={gap_tolerance}")
+
+
+            for k in range(1, max_iterations + 1): # To avoid division by zero in the step size
+
+                current_lb = self.computeTheta(labda)
+                lower_bounds_history.append(current_lb)
+
+                
+                if current_lb > best_lb:
+                    best_lb = current_lb
+
+                lagrangian_sol = self.computeLagrangianSolution(labda)
+
+
+                feasible_sol = self.convertToFeasibleSolution(lagrangian_sol)
+
+                current_up = np.inf 
+                if feasible_sol.isFeasible():
+                    current_up = feasible_sol.getCosts()
+                    upper_bounds_history.append(current_up)
+                    if current_up < best_up:
+                        best_up = current_up
+                        best_feasible_solution = feasible_sol
+                else:
+                    print("solution is not feasible!")
+
+
+                Best_upper_bounds_history.append(best_up)
+ 
+                
+                if best_up < np.inf and best_lb > -np.inf and best_up > 0: # A
+                    gap = (best_up - best_lb) / best_up
+                    #print(gap)
+
+
+
+                
+                if gap <= gap_tolerance:
+                    print(f"\nTermination criterion met: Gap ({gap*100:.2f}%) <= Tolerance ({gap_tolerance*100:.2f}%) at iteration {k}.")
+                    break
+                
+                #print(labda)
+                labda = self.updateMultipliers(labda, lagrangian_sol, k, initial_step)
+                #print(labda)
+                #break
+
+
+
+            print("\nLagrangian Heuristic Finished.")
+            #print("gap_tolerance :",gap_tolerance)
+            print(f"Final Best Lower Bound: {best_lb:.2f}")
+            print(f"Final Best Upper Bound: {best_up:.2f}")
+            final_gap = (best_up - best_lb) / best_up if best_up > 0 and best_up < np.inf else np.inf
+            print(f"Final Gap: {final_gap*100:.2f}%")
+
+            iterations = range(1, k + 1) 
+
+            plt.figure(figsize=(10, 6)) 
+
+
+            plt.plot(iterations, lower_bounds_history, label='Best Lower Bound', color='blue', linestyle='-')
+
+            plt.plot(iterations, Best_upper_bounds_history, label='Best Upper Bound', color='red', linestyle='-')
+
+            plt.plot(iterations, upper_bounds_history, label='Upper Bound', color='black', linestyle='-',linewidth=0.5,alpha=0.5)
+
+
+            plt.xlabel('Iteration')
+            plt.ylabel('Objective Value (Cost)')
+            plt.title('Lagrangian Heuristic Bounds Progression')
+            plt.legend()
+            plt.grid(True)
+            plt.tight_layout() 
+            plt.show()
+
+            return best_feasible_solution, best_lb, best_up, lower_bounds_history, upper_bounds_history
         
         
-read_instance = UFL_Problem.readInstance("MO1")
+        
+        
+read_instance = UFL_Problem.readInstance("MO3")
 n_markets = read_instance.n_markets
 n_facilities = read_instance.n_facilities
 
-# open all facilities and split each market equally among them (feasible)
+
 y = np.ones(n_facilities)
 x = np.ones((n_markets, n_facilities)) / n_facilities
 
 #print(x.sum(axis=1))
-solution = UFL_Solution(y, x, read_instance)
-
-#solution.isFeasible()
-solution.getCosts()
 lagrangian_heuristic = LagrangianHeuristic(read_instance)
-#lagrangian_heuristic.computeTheta(np.ones(n_markets)* 40)
-solution = lagrangian_heuristic.computeLagrangianSolution(np.ones(n_markets) * 1)
-print(UFL_Solution.isFeasible(solution))
-solution = lagrangian_heuristic.convertToFeasibleSolution(solution)
-print(UFL_Solution.isFeasible(solution))
+lagrangian_heuristic.computeTheta(np.ones(n_markets))
+solution = lagrangian_heuristic.computeLagrangianSolution(np.zeros(n_markets) * 20)
+#print(UFL_Solution.isFeasible(solution))
+#print(solution.getCosts())
+#solution = lagrangian_heuristic.convertToFeasibleSolution(solution)
+#print(UFL_Solution.isFeasible(solution))
+#print(solution.getCosts())
+
+#lagrangian_heuristic.updateMultipliers(np.ones(n_markets) * 2, solution, 100)
+#print("Running Heuristic:")
+#print(lagrangian_heuristic.runHeuristic())
+#lagrangian_heuristic.runHeuristic(max_iterations=2500, initial_step=1.0, gap_tolerance=0.1)
 #print(read_instance)
