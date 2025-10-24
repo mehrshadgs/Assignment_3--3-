@@ -4,7 +4,8 @@
 """
 import numpy as np
 import matplotlib.pyplot as plt
-
+import os
+import pandas as pd
 
 class UFL_Problem:
     """
@@ -248,7 +249,7 @@ class LagrangianHeuristic:
 
    
             x = np.where(assign_if_cost_neg & assign_if_facility_open, 1.0, 0.0)
-
+            #print(x[0])
 
             return UFL_Solution(y, x, self.instance)
         
@@ -300,8 +301,7 @@ class LagrangianHeuristic:
             
             sum_x_over_j = np.sum(lagr_solution.x, axis=1)
 
-            # AI idea: Step size decreases with sqrt of iteration number
-            step = initial_step / np.sqrt(iteration) 
+            step = initial_step / np.sqrt(iteration)  # Suggested by AI, The algorithm, I was using initial_step * (1. -/+ iteration) was diverging too quickly
 
 
             labda_new = labda_old.copy() 
@@ -318,7 +318,7 @@ class LagrangianHeuristic:
             #print(labda_new)
             return labda_new
 
-    def runHeuristic(self, max_iterations, initial_step=2.0, gap_tolerance=0.1):
+    def runHeuristic(self, max_iterations, initial_step=2.0, gap_tolerance=0.1, instance_name=None):
             """
             Method that performs the Lagrangian Heuristic.
             """
@@ -361,17 +361,11 @@ class LagrangianHeuristic:
 
 
                 Best_upper_bounds_history.append(best_up)
- 
                 
-                if best_up < np.inf and best_lb > -np.inf and best_up > 0: # A
-                    gap = (best_up - best_lb) / best_up
-                    #print(gap)
-
-
-
-                
+                gap = (best_up - best_lb) / best_up
+    
                 if gap <= gap_tolerance:
-                    print(f"\nTermination criterion met: Gap ({gap*100:.2f}%) <= Tolerance ({gap_tolerance*100:.2f}%) at iteration {k}.")
+                    
                     break
                 
                 #print(labda)
@@ -401,30 +395,32 @@ class LagrangianHeuristic:
 
 
             plt.xlabel('Iteration')
-            plt.ylabel('Objective Value (Cost)')
-            plt.title('Lagrangian Heuristic Bounds Progression')
+            plt.ylabel('Cost')
+            plt.title('Lagrangian Heuristic Bounds for ' + instance_name)
             plt.legend()
             plt.grid(True)
             plt.tight_layout() 
-            plt.show()
+            plt.savefig(instance_name + '.png')
+            #plt.show()
+            plt.close()
 
-            return best_feasible_solution, best_lb, best_up, lower_bounds_history, upper_bounds_history
+            return best_feasible_solution, best_lb, best_up, lower_bounds_history, upper_bounds_history,k
         
         
         
         
-read_instance = UFL_Problem.readInstance("MO3")
-n_markets = read_instance.n_markets
-n_facilities = read_instance.n_facilities
+# read_instance = UFL_Problem.readInstance("MO3")
+# n_markets = read_instance.n_markets
+# n_facilities = read_instance.n_facilities
 
 
-y = np.ones(n_facilities)
-x = np.ones((n_markets, n_facilities)) / n_facilities
+# # y = np.ones(n_facilities)
+# # x = np.ones((n_markets, n_facilities)) / n_facilities
 
-#print(x.sum(axis=1))
-lagrangian_heuristic = LagrangianHeuristic(read_instance)
-lagrangian_heuristic.computeTheta(np.ones(n_markets))
-solution = lagrangian_heuristic.computeLagrangianSolution(np.zeros(n_markets) * 20)
+# #print(x.sum(axis=1))
+# lagrangian_heuristic = LagrangianHeuristic(read_instance)
+# lagrangian_heuristic.computeTheta(np.ones(n_markets))
+# solution = lagrangian_heuristic.computeLagrangianSolution(np.zeros(n_markets) * 20)
 #print(UFL_Solution.isFeasible(solution))
 #print(solution.getCosts())
 #solution = lagrangian_heuristic.convertToFeasibleSolution(solution)
@@ -436,3 +432,39 @@ solution = lagrangian_heuristic.computeLagrangianSolution(np.zeros(n_markets) * 
 #print(lagrangian_heuristic.runHeuristic())
 #lagrangian_heuristic.runHeuristic(max_iterations=2500, initial_step=1.0, gap_tolerance=0.1)
 #print(read_instance)
+instance_dir = "Instances"
+instance_files = [f for f in os.listdir(instance_dir) if os.path.isfile(os.path.join(instance_dir, f))] # AI generated
+
+step_sizes = [0.1,0.5,1,1.5,2,5]  # You can modify this list to include other step sizes if needed
+step_sizes = [1]
+results = []
+problems = {}
+for fname in instance_files:
+    for step in step_sizes:
+        try:
+            problems[fname] = UFL_Problem.readInstance(fname) 
+            lagrangian_heuristic = LagrangianHeuristic(problems[fname])
+            best_feasible_solution, best_lb, best_up, lower_bounds_history, upper_bounds_history,k = lagrangian_heuristic.runHeuristic(max_iterations=2000, initial_step=step, gap_tolerance=0.1, instance_name=fname)
+
+            results.append({
+                #'best_feasible_solution': best_feasible_solution,
+                'instance_name': fname,
+               #'Step Size': step,
+                'best_lower_bound': best_lb,
+                'best_upper_bound': best_up,
+                'iterations': k,
+            #  'lower_bounds_history': lower_bounds_history,
+            #   'upper_bounds_history': upper_bounds_history
+            })  
+            #print(fname)
+            
+            #break
+        except Exception as e:
+            print(f"skipping {fname}: {e}")
+print(results)
+
+pd_results = pd.DataFrame(results)
+pd_results.to_csv("UFL_Results.csv", index=False)
+# now `problems` maps filename -> UFL_Problem instance
+
+
